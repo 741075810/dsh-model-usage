@@ -1,0 +1,5 @@
+# dsh-model-usage bundle layer: insert the per-model usage dashboard plugin row.
+- insert:
+    - id: dsh-model-usage
+      name: 'dsh-model-usage'
+      config: {}

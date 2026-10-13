@@ -1,0 +1,53 @@
+{
+  "name": "dsh-model-usage",
+  "version": "0.1.0",
+  "description": "DSH 模型用量插件：扫描全部会话日志，按 provider / 模型统计请求数与 token 用量（输入、输出、缓存命中、缓存写入），支持日期范围、每日趋势和会话排行。",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "usage",
+    "tokens",
+    "model"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/741075810/dsh-model-usage.git"
+  },
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./scan": "./lib/scan.js",
+    "./aggregate": "./lib/aggregate.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check lib/index.js && node --check lib/scan.js && node --check lib/aggregate.js && node --check lib/client.js",
+    "test": "node --test test/"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "cordis": ">=4.0.0-rc <5"
+  },
+  "engines": {
+    "node": "^22.15.0 || >=24.0.0"
+  }
+}
