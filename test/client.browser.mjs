@@ -43,16 +43,22 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   let delay = false;
+  let refreshDelay = false;
+  let reopenDelay = false;
+  let noCache = false;
   await page.route(origin + "/__model_usage_fixture", (route) => route.fulfill({ contentType: "text/html", body: html }));
   await page.route(origin + "/model-usage/api/**", async (route) => {
     const url = new URL(route.request().url());
     requests.push(url);
     const q = url.searchParams;
-    const summary = aggregate(records, {
+    if (q.get("refresh") === "1") noCache = false;
+    const summary = aggregate(noCache ? [] : records, {
       from: q.get("from"), to: q.get("to"), provider: q.get("provider"), model: q.get("model"), includeSubagents: q.get("subagents") !== "0"
     });
-    const status = { files: 3, lastScanAt: Date.now(), errors: [], progress: null };
+    const status = { files: noCache ? 0 : 3, cacheReady: !noCache, mode: "manual", scanning: false,
+      lastScanAt: noCache ? null : Date.now(), errors: [], progress: null };
     if (delay && q.get("provider") === "p1") await new Promise((done) => setTimeout(done, 300));
+    if ((refreshDelay && q.get("refresh") === "1") || reopenDelay) await new Promise((done) => setTimeout(done, 300));
     await route.fulfill({ json: { ok: true, result: url.pathname.endsWith("/summary") ? { ...summary, status } : status } }).catch(() => {});
   });
   await page.goto(origin + "/__model_usage_fixture");
@@ -197,8 +203,43 @@ try {
   assert.equal(await from.evaluate((el) => getComputedStyle(el).colorScheme), "dark");
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.screenshot({ path: join(artifacts, "dark.png") });
+
+  // Manual refresh is one action, not a sticky mode inherited by later filters/opens.
+  const forced = () => requests.filter((url) => url.searchParams.get("refresh") === "1").length;
+  const forcedBefore = forced();
+  refreshDelay = true;
+  await page.getByRole("button", { name: "\u5237\u65b0", exact: true }).click();
+  assert.equal(await page.locator(".mu-card").first().getAttribute("title"), "1,265");
+  await waitTotal(1265);
+  assert.equal(forced(), forcedBefore + 1);
+  refreshDelay = false;
+  await provider.selectOption("p2");
+  await waitTotal(330);
+  assert.equal(forced(), forcedBefore + 1);
+  await page.keyboard.press("Escape");
+  reopenDelay = true;
+  await page.locator(".mu-tab-btn").click();
+  assert.equal(await page.locator(".mu-card").first().getAttribute("title"), "330");
+  await waitTotal(330);
+  reopenDelay = false;
+  assert.equal(forced(), forcedBefore + 1);
+  const idleRequests = requests.length;
+  await page.waitForTimeout(1100);
+  assert.equal(requests.length, idleRequests, "Idle dashboards must not keep polling or importing logs");
+  assert.equal(await page.locator(".mu-snapshot").isVisible(), true);
+
+  // A fresh install waits for explicit Refresh instead of importing logs on open.
+  await page.evaluate(() => window.__disposeUsage());
+  noCache = true;
+  await page.evaluate(() => window.__mountUsage());
+  await page.locator(".mu-tab-btn").click();
+  await page.getByText("\u5c1a\u672a\u5efa\u7acb\u7edf\u8ba1\u7f13\u5b58\uff0c\u70b9\u51fb\u300c\u5237\u65b0\u300d\u5f00\u59cb\u7edf\u8ba1\u3002", { exact: true }).waitFor();
+  assert.equal(forced(), forcedBefore + 1);
+  await page.getByRole("button", { name: "\u5237\u65b0", exact: true }).click();
+  await waitTotal(1265);
+  assert.equal(forced(), forcedBefore + 2);
   assert.deepEqual(errors, []);
-  console.log("PASS: cascading selectors, dates, subagents, reset, stale requests, long ranges, mobile layout, tab remount and cleanup");
+  console.log("PASS: filters, dates, layouts, tab lifecycle, snapshot reopen, one-shot refresh, idle and cold-cache behavior");
   console.log("Screenshots: " + artifacts);
 } finally {
   await browser.close();

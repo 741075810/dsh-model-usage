@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-usage",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DSH 模型用量插件：扫描全部会话日志，按 provider / 模型统计请求数与 token 用量（输入、输出、缓存命中、缓存写入），支持日期范围、每日趋势和会话排行。",
   "license": "MIT",
   "keywords": [
@@ -31,7 +31,7 @@
   ],
   "scripts": {
     "check": "node --check lib/index.js && node --check lib/scan.js && node --check lib/aggregate.js && node --check lib/client.js",
-    "test": "node --test test/scan.test.mjs test/aggregate.test.mjs test/api.test.mjs",
+    "test": "node --test test/scan.test.mjs test/aggregate.test.mjs test/api.test.mjs test/incremental.test.mjs",
     "test:browser": "node test/client.browser.mjs"
   },
   "dsh": {

@@ -14,6 +14,7 @@ DSH（DeepSeek Harness）模型用量插件：扫描本机全部会话日志，�
 - 按模型表格：请求、输入、输出、缓存读、缓存写、合计、占比，可排序；点击行展开「对话 / 失败重试 / 上下文压缩」分项和使用天数
 - 每日趋势柱状图（前 5 个模型分色，其余合并为「其他」）；长区间合并为最多 180 个连续日期柱，悬停显示区间，保留全部用量
 - 用量最高的 20 个会话
+- 手动快照：打开、筛选和重开面板使用已有缓存；只有「刷新」导入新增用量，「重建缓存」全量重扫
 
 ## 数据来源
 
@@ -33,13 +34,21 @@ Provider 和模型下拉项来自全部历史日志中有用量的模型，不�
 
 ## 性能
 
-首次扫描约 15–20 秒（600+ 会话、约 700 MB 压缩日志），结果按文件 size + mtime 缓存在 `<dshHome>/dsh-model-usage/cache.json`。之后打开面板只重新解析有变化的会话（通常是正在进行的那一个），不到 1 秒。插件启动 8 秒后会在后台预热一次。面板上「重建缓存」会清空缓存重新扫描。
+采用**手动更新快照**，结果保存在 `<dshHome>/dsh-model-usage/cache.json`。插件启动、打开面板、切换筛选都不会解压会话日志；没有定时扫描、启动预热或持续文件监听。重开面板保留上次结果，新增请求在点击「刷新」后导入。首次安装没有缓存时，也等待点击「刷新」建立统计。
+
+「刷新」先检查文件元数据，跳过未变化日志；增长的日志从持久化游标读取新增完整 zstd 帧或 JSONL 字节，保留 provider/model 路由、未完行原始字节及统计记录。半帧、半行等待完成后再计数；文件身份使用精确 BigInt 字符串，已读尾帧哈希用于识别 DSH 的尾部回滚。文件缩短、替换、同大小改写或校验失配时，仅重读对应日志并替换旧贡献。
+
+旧版缓存可直接显示，缺少增量游标的已变化日志在首次手动刷新时完整读取一次，之后使用新增帧。只有「重建缓存」会主动从头读取全部日志，重建完成前仍保留旧快照显示。初次导入和重建耗时取决于日志体积。
+
+打开或筛选会检查缓存文件是否仍存在，仅访问元数据。已删除或移入回收站的会话从快照、历史选项和持久缓存中剔除，这一步不解压日志。
 
 ## 安全
 
 HTTP 接口 `/model-usage/api/*` 复用 GUI `/api` 通道同一套准入（`connection.requestRejection`：Host/Origin 校验 + 签名的 HttpOnly 会话 cookie）。拿不到 `connection` 服务时直接返回 503，不会无鉴权放行。插件不写会话目录，只写自己的缓存文件。
 
 统计接口支持 `GET /model-usage/api/summary?provider=PROVIDER&model=MODEL&from=YYYY-MM-DD&to=YYYY-MM-DD&subagents=0`。参数可省略；模型 ID 的 `/` 等字符应进行 URL 编码。非法日期或倒置区间返回 400。返回结果包含筛选后的 `totals/models/providers/days/sessions` 和独立的历史 `catalog`。
+
+普通 `GET /summary` 只查询快照；追加 `refresh=1` 才导入变化日志。`POST /rebuild` 从头导入全部日志。`status` 包含 `mode: "manual"`、`cacheReady`、`needsRefresh`、扫描次数及上次手动读取的 `bytesRead/incrementalFiles/fullFiles`；`needsRefresh` 只反映已缓存路径的变化，新会话也通过手动刷新导入。
 
 ## 安装
 
@@ -59,10 +68,10 @@ git clone https://github.com/741075810/dsh-model-usage.git "$env:USERPROFILE\.ds
 
 ```powershell
 npm run check   # node --check 全部源文件
-npm test        # node:test，覆盖 zstd 分帧、事件折叠、聚合与筛选
+npm test        # 32 项回归：增量游标、UTF-8、回滚、快照/删除同步、聚合及筛选
 ```
 
-浏览器回归使用隔离的日志样本和真实客户端代码，覆盖 Provider/模型联动、日期、子代理、重置、旧请求竞争、长区间、窄屏布局、标签重挂载和清理。需要已安装 React 18、React DOM 18、Playwright 及 Chromium；可通过 `MU_BROWSER_MODULE_BASE` 指定这些依赖所在的项目目录：
+浏览器回归使用隔离的日志样本和真实客户端代码，覆盖 Provider/模型联动、日期、子代理、重置、旧请求竞争、长区间、窄屏布局、标签重挂载、快照重开、刷新仅触发一次、闲置无轮询及首次缓存手动建立。需要已安装 React 18、React DOM 18、Playwright 及 Chromium；可通过 `MU_BROWSER_MODULE_BASE` 指定这些依赖所在的项目目录：
 
 ```powershell
 $env:MU_BROWSER_MODULE_BASE = "$env:USERPROFILE\.dsh\profiles\desktop"
@@ -72,6 +81,8 @@ npm run test:browser
 截图写入 `test/artifacts/`（已忽略），可用 `MU_BROWSER_ARTIFACTS` 自定义输出目录。此测试不修改运行中 GUI 的真实会话或插件状态。
 
 无构建步骤：`lib/client.js` 直接作为 DSH 客户端 bundle 加载。
+
+可选的 `node test/benchmark.manual.mjs` 使用真实日志的临时副本和隔离缓存，比对旧版全读与增量读的用量一致性、字节数和耗时；真实会话和统计缓存保持只读。设置 `MU_BENCH_HOME` 指定 DSH home，`MU_BENCH_OUTPUT` 保存性能结果；运行环境须保留 Git 历史中的 `c96fcf8`，或用 `MU_BENCH_BASELINE` 指定旧版引用。
 
 ## 已知限制
 
