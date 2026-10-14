@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { apply } from "../lib/index.js";
@@ -33,7 +33,7 @@ async function host(t, auth = connection) {
     ].map((e) => JSON.stringify(e)).join("\n") + "\n");
   }
   apply(ctx);
-  return async (path, { authorized = true, method = "GET" } = {}) => {
+  const request = async (path, { authorized = true, method = "GET" } = {}) => {
     let status;
     let body;
     await route.handler({ url: "/model-usage/api" + path, method, headers: authorized ? { authorization: "fixture" } : {} }, {
@@ -42,6 +42,8 @@ async function host(t, auth = connection) {
     });
     return { status, body };
   };
+  request.root = root;
+  return request;
 }
 
 test("API accepts provider/model/date selectors and returns the historical catalog", async (t) => {
@@ -85,4 +87,38 @@ test("API retains authentication for filtered queries", async (t) => {
 test("API fails closed when the connection admission service is missing", async (t) => {
   const request = await host(t, null);
   assert.equal((await request("/summary?provider=p1")).status, 503);
+});
+
+test("refresh evicts deleted sessions from a warm cache and historical filter catalog", async (t) => {
+  const request = await host(t);
+  const before = await request("/summary");
+  assert.equal(before.body.result.totals.total, 1120);
+  assert.equal(before.body.result.status.files, 2);
+
+  await rm(join(request.root, "sessions", "project", "a"), { recursive: true });
+  const after = await request("/summary?refresh=1");
+  assert.equal(after.status, 200);
+  assert.equal(after.body.result.totals.total, 1010);
+  assert.equal(after.body.result.totals.sessions, 1);
+  assert.equal(after.body.result.status.files, 1);
+  assert.deepEqual(after.body.result.sessions.map((s) => s.id), ["b"]);
+  assert.deepEqual(after.body.result.catalog.providers, ["p2"]);
+  assert.deepEqual(after.body.result.catalog.models, [{ provider: "p2", model: "model/a" }]);
+  assert.deepEqual(Object.keys(after.body.result.days[0].byModel), ["p2|model/a"]);
+  const deletedProvider = await request("/summary?provider=p1");
+  assert.equal(deletedProvider.body.result.totals.total, 0);
+  assert.deepEqual(deletedProvider.body.result.sessions, []);
+  const cachePath = join(request.root, "dsh-model-usage", "cache.json");
+  const cache = JSON.parse(await readFile(cachePath, "utf8"));
+  assert.deepEqual(Object.values(cache.files).map((e) => e.record.id), ["b"]);
+
+  await rm(join(request.root, "sessions", "project", "b"), { recursive: true });
+  const empty = await request("/summary?refresh=1");
+  assert.equal(empty.body.result.totals.total, 0);
+  assert.equal(empty.body.result.status.files, 0);
+  assert.deepEqual(empty.body.result.models, []);
+  assert.deepEqual(empty.body.result.days, []);
+  assert.deepEqual(empty.body.result.sessions, []);
+  assert.deepEqual(empty.body.result.catalog, { providers: [], models: [] });
+  assert.deepEqual(JSON.parse(await readFile(cachePath, "utf8")).files, {});
 });
