@@ -31,7 +31,8 @@
   ],
   "scripts": {
     "check": "node --check lib/index.js && node --check lib/scan.js && node --check lib/aggregate.js && node --check lib/client.js",
-    "test": "node --test test/scan.test.mjs"
+    "test": "node --test test/scan.test.mjs test/aggregate.test.mjs test/api.test.mjs",
+    "test:browser": "node test/client.browser.mjs"
   },
   "dsh": {
     "bundle": {
